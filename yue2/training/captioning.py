@@ -53,12 +53,12 @@ def listen(client, audio, request, prompt, emit, cancelled):
             try:
                 interaction = client.interactions.create(model=request["model"], store=False,
                     input=[{"type": "audio", "uri": uploaded.uri, "mime_type": uploaded.mime_type}, {"type": "text", "text": prompt}],
-                    response_format=SCHEMA, timeout=300)
+                    response_format={"type": "text", "mime_type": "application/json", "schema": SCHEMA}, timeout=300)
                 break
             except Exception as error:
                 # Only transient API failures are retried; refusals/schema failures are surfaced.
                 if getattr(error, "status_code", None) not in {429, 500, 502, 503, 504} or attempt == 2:
-                    raise RuntimeError(f"Gemini request failed ({type(error).__name__}); check the selected model and credentials") from None
+                    raise RuntimeError(f"Gemini request failed ({type(error).__name__}): {error}") from None
                 for _ in range(2 ** (attempt + 1)):
                     cancelled()
                     time.sleep(1)

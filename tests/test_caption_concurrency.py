@@ -1,5 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
+import json
 from threading import Barrier, Event, Lock
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -104,3 +106,29 @@ def test_failure_keeps_completed_manifest(tmp_path, monkeypatch):
 def test_invalid_concurrency(value):
     with pytest.raises(ValueError, match="concurrent_requests"):
         captioning.caption({"concurrent_requests": value}, lambda _: None, lambda: None, object())
+
+
+def test_listen_uses_current_interactions_response_format(tmp_path):
+    sf.write(tmp_path / "song.wav", np.zeros(100), 8000)
+    captured = {}
+    result = dict(style="piano", lyrics="", instrumental=True, uncertainty="", complete=True)
+
+    def create(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(output_text=json.dumps(result))
+
+    client = SimpleNamespace(
+        files=SimpleNamespace(
+            upload=lambda file: SimpleNamespace(
+                name="upload", state="ACTIVE", uri="https://example.invalid/audio", mime_type="audio/wav"
+            ),
+            delete=lambda name: None,
+        ),
+        interactions=SimpleNamespace(create=create),
+    )
+    captioning.listen(client, tmp_path / "song.wav", {"model": "gemini-3.8-flash"}, "prompt", lambda _: None, lambda: None)
+    assert captured["response_format"] == {
+        "type": "text",
+        "mime_type": "application/json",
+        "schema": captioning.SCHEMA,
+    }
