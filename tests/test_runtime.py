@@ -8,7 +8,9 @@ from fl_yue2.yue2 import runtime
 
 
 @pytest.mark.parametrize("causal", [False, True])
-@pytest.mark.parametrize("length", [1, 7, 270])
+# length=4 equals the query head count: guards gqa detection against confusing
+# the kv head axis with the sequence axis when the two happen to match.
+@pytest.mark.parametrize("length", [1, 4, 7, 270])
 def test_attention_preserves_gqa_and_causality(causal, length):
     generator = torch.Generator().manual_seed(10)
     q = torch.randn(1, length, 4, 8, generator=generator)
@@ -17,6 +19,51 @@ def test_attention_preserves_gqa_and_causality(causal, length):
     expected = torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
                                                                 enable_gqa=True, is_causal=causal).transpose(1, 2)
     torch.testing.assert_close(attention(q, k, v, causal), expected, atol=2e-6, rtol=2e-5)
+
+
+@pytest.mark.parametrize("causal", [False, True])
+@pytest.mark.parametrize("length", [1, 7, 270])
+def test_attention_never_uses_device_selected_backend(monkeypatch, causal, length):
+    # xformers on RTX 50x (sm_120) has no operator for a dense tensor attn_bias, so
+    # attention() must bypass ComfyUI's device-selected backend entirely; every call
+    # goes through comfy.ops.scaled_dot_product_attention, which dispatches to the
+    # flash/cudnn/efficient backends that support sm_120.
+    import fl_yue2.yue2.model as model_module
+
+    # The fix is the absence of the device-selected backend: model.py must not
+    # even import it (xformers dispatch on sm_120 has no operator for a dense
+    # tensor attn_bias), so assert that first.
+    assert not hasattr(model_module, "optimized_attention_for_device")
+
+    def broken_for_device(device, mask=False, small_input=False):
+        raise NotImplementedError("No operator found for `memory_efficient_attention_forward` "
+                                  "(simulated sm_120 xformers dispatch)")
+
+    # Defense in depth: if any path reaches the backend through the comfy
+    # module instead of a local import, fail loudly here.
+    import comfy.ldm.modules.attention as comfy_attention
+    monkeypatch.setattr(comfy_attention, "optimized_attention_for_device", broken_for_device)
+    generator = torch.Generator().manual_seed(10)
+    q = torch.randn(1, length, 4, 8, generator=generator)
+    k = torch.randn(1, length, 2, 8, generator=generator)
+    v = torch.randn(1, length, 2, 8, generator=generator)
+
+    calls = []
+    real_sdpa = model_module.comfy.ops.scaled_dot_product_attention
+
+    def spy(q_, k_, v_, *args, **kwargs):
+        calls.append(kwargs.get("attn_mask") is not None or kwargs.get("is_causal", False))
+        return real_sdpa(q_, k_, v_, *args, **kwargs)
+
+    monkeypatch.setattr(model_module.comfy.ops, "scaled_dot_product_attention", spy)
+    expected = torch.nn.functional.scaled_dot_product_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2),
+                                                                enable_gqa=True, is_causal=causal).transpose(1, 2)
+    try:
+        got = model_module.attention(q, k, v, causal)
+    finally:
+        monkeypatch.undo()
+    torch.testing.assert_close(got, expected, atol=2e-6, rtol=2e-5)
+    assert calls, "attention() must route through comfy.ops.scaled_dot_product_attention"
 
 
 def test_download_boundary(tmp_path):

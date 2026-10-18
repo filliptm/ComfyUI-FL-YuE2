@@ -6,25 +6,39 @@ from torch import nn
 import torch.nn.functional as F
 import comfy.ops
 import comfy_kitchen
-from comfy.ldm.modules.attention import optimized_attention_for_device
 
 
 def attention(q, k, v, causal=False):
     # [B,T,H,D]; query tiles bound causal-mask storage without hiding past keys.
+    # Every path goes through PyTorch SDPA (comfy.ops wrapper), never the
+    # device-selected backend: xformers has no operator for a dense tensor
+    # attn_bias on RTX 50x (sm_120) — FA3 is not built, FA2 only accepts
+    # structured biases, and CUTLASS F has no sm_120 kernel — so ComfyUI's
+    # xformers selection must be bypassed entirely. SDPA dispatches to the
+    # flash/cudnn/efficient backends that do support sm_120, with math as a
+    # fallback. The first causal tile is an exact is_causal diagonal and offset
+    # tiles use a dense additive mask; GQA falls back to KV repetition when a
+    # backend cannot combine native GQA with a mask (handled by the wrapper).
     batch, length, heads, dim = q.shape
-    selected = optimized_attention_for_device(q.device, mask=causal)
     q, k, v = (x.transpose(1, 2) for x in (q, k, v))
+    gqa = heads != k.shape[1]  # [B,H,T,D]; kv head count, not sequence length
     outputs = []
     block = 256 if causal else length
     for start in range(0, length, block):
         end = min(start + block, length)
         key_end = end if causal else k.shape[2]
-        mask = None
-        if causal:
+        query, key, value = q[:, :, start:end], k[:, :, :key_end], v[:, :, :key_end]
+        if not causal:
+            output = comfy.ops.scaled_dot_product_attention(query, key, value, enable_gqa=gqa)
+            outputs.append(output.transpose(1, 2))
+        elif start == 0:
+            output = comfy.ops.scaled_dot_product_attention(query, key, value, is_causal=True, enable_gqa=gqa)
+            outputs.append(output.transpose(1, 2))
+        else:
             visible = torch.arange(key_end, device=q.device)[None] <= torch.arange(start, end, device=q.device)[:, None]
             mask = torch.zeros((end - start, key_end), dtype=q.dtype, device=q.device).masked_fill_(~visible, -torch.inf)
-        outputs.append(selected(q[:, :, start:end], k[:, :, :key_end], v[:, :, :key_end],
-                                heads, mask=mask, skip_reshape=True, enable_gqa=heads != k.shape[1]))
+            output = comfy.ops.scaled_dot_product_attention(query, key, value, attn_mask=mask, enable_gqa=gqa)
+            outputs.append(output.transpose(1, 2))
     return torch.cat(outputs, dim=1).reshape(batch, length, heads, dim)
 
 
