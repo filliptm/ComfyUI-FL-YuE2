@@ -11,6 +11,11 @@ https://huggingface.co/m-a-p/YuE2-3B
 https://huggingface.co/m-a-p/YuE2-Vae
 https://huggingface.co/m-a-p/YuE2-Vae-legacy
 
+The optional YuE2-VAE-RS x3 v1/v2 decoder weights (Ruach Studio, adapted from
+YuE2-Vae), downloaded on request into models/yue2/YuE2-VAE-RS/, are licensed
+under the same CC BY-NC 4.0. Credit YuE2 and m-a-p, and Ruach Studio for VAE-RS:
+https://huggingface.co/goldhub/YuE2-RS-Finetunes
+
 This weight license does not replace separately applicable licenses for code,
 text tokenization files, evaluation assets or other bundled material.
 Third-party source notices and their original license texts are preserved in

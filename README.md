@@ -53,6 +53,14 @@ The output is a stereo mix. Use an existing audio-separation node for stems. Edi
 
 For instrumental prompts, leave lyrics blank and describe the instrumentation in style. `full` generates melody and chords; `melody` generates a melody score. Only `off` skips planning. A supplied ABC score bypasses score generation and retains the selected `full` or `melody` instruction. Blank lyrics never override your planning choice.
 
+### Alternative audio decoder: YuE2-VAE-RS x3
+
+**Load Audio Decoder** can replace the `audio_decoder` from Load Models. `YuE2-Vae` is the same standard decoder. `YuE2-VAE-RS-x3_v1` and `YuE2-VAE-RS-x3_v2` are [Ruach Studio](https://github.com/igrbible/Ruach_Studio)'s [YuE2-VAE-RS](https://huggingface.co/goldhub/YuE2-RS-Finetunes/tree/main/VAE-RS) decoders: the YuE2-Vae decoder grown three times and trained on music. They decode the same latents, so composition and rendering do not change; only the decoder that turns latents into audio does.
+
+The first queued load downloads one 0.8 GB float32 file and its license into `ComfyUI/models/yue2/YuE2-VAE-RS/` from a pinned revision and verifies its SHA-256 on every load. A file replaced under the same name is reloaded, and a file that is not the pinned release (a float16 or incomplete copy, a `-full` file, the other version) is refused with the reason. The grown decoder runs in float32 with TF32 off, and its tiles carry the context it needs (60 frames each side, derived like the standard decoder's), so tiled output matches whole-song decoding. Training and source encoding always use the standard YuE2-Vae encoder.
+
+The YuE2-VAE-RS weights are CC BY-NC 4.0, like YuE2's: credit YuE2 and m-a-p, and Ruach Studio for VAE-RS. DOI [10.5281/zenodo.24167962](https://doi.org/10.5281/zenodo.24167962).
+
 ## Score editor
 
 ![YuE2 piano roll with an editable score](assets/piano-roll.png)
@@ -125,4 +133,4 @@ See [validation notes](docs/VALIDATION.md) for the tested environment, generated
 
 Adapted from [YuE2](https://github.com/multimodal-art-projection/YuE), commit `92a73cc7652fcc1f937855e4b765e0a0edd7ff2e`. Source code is Apache 2.0. **Model weights are CC BY-NC 4.0**, separately from the source license. Preserve `LICENSE`, `MODEL_LICENSE`, and `THIRD_PARTY_NOTICES.md` when redistributing.
 
-Pinned checkpoints: YuE2-3B `1a96eca688d6ae5d7f0feb88573fec89920fcd19`; YuE2-Vae `95535e72a97bc0f09b8ada125d26b4009428c0e8`.
+Pinned checkpoints: YuE2-3B `1a96eca688d6ae5d7f0feb88573fec89920fcd19`; YuE2-Vae `95535e72a97bc0f09b8ada125d26b4009428c0e8`. Optional decoders: goldhub/YuE2-RS-Finetunes `b371be93fe7320c7084813b4f5967a6820756a06`, `VAE-RS/YuE2-VAE-RS-x3_v1.safetensors` and `VAE-RS/YuE2-VAE-RS-x3_v2.safetensors`.

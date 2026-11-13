@@ -10,9 +10,9 @@ import comfy.ops
 from comfy.model_patcher import ModelPatcher
 from comfy.utils import ProgressBar
 
-from .downloads import resolve
+from .downloads import resolve, decoder
 from .model import YuE2Model
-from .vae import YuE2VAE
+from .vae import YuE2VAE, grown_weights
 from .tokenizer import YuE2TextTokenizer
 from .protocol import SongRequest, GenerationConfig, token_prefixes, negative_prefix, CODEC_OFFSET, resolve_sampling
 from .sampling import generate_tokens
@@ -59,15 +59,28 @@ def load_models(download_missing=True, model_directory=None):
     generation = GenerationConfig.from_dict(json.loads((paths[0] / "yue2_generation_config.json").read_text()))
     music = MusicModel(patcher, YuE2TextTokenizer(paths[0] / "qwen.tiktoken"), generation)
 
-    config = json.loads((paths[1] / "config.json").read_text())
+    return music, load_vae(paths[1])
+
+
+def load_vae(root, decoder_file=None):
+    """YuE2-Vae's decoder, or with decoder_file a YuE2-VAE-RS x3 decoder for the same latents (YuE2-Vae supplies its config)."""
+    config = json.loads((root / "config.json").read_text())
     with torch.device("meta"):
-        vae = YuE2VAE(config)
-    weights = load_file(str(paths[1] / "model.safetensors"))
-    weights = {key.replace(".weight_g", ".parametrizations.weight.original0").replace(".weight_v", ".parametrizations.weight.original1"): value
-               for key, value in weights.items() if key.startswith("decoder.")}
+        vae = YuE2VAE(config, grown=decoder_file is not None)
+    if decoder_file is None:
+        weights = load_file(str(root / "model.safetensors"))
+        weights = {key.replace(".weight_g", ".parametrizations.weight.original0").replace(".weight_v", ".parametrizations.weight.original1"): value
+                   for key, value in weights.items() if key.startswith("decoder.")}
+    else:
+        weights = grown_weights(load_file(str(decoder_file)))
     vae.load_state_dict(weights, strict=True, assign=True)
     vae.eval()
-    return music, ModelPatcher(vae, device, mm.unet_offload_device())
+    return ModelPatcher(vae, mm.get_torch_device(), mm.unet_offload_device())
+
+
+def load_decoder(name, download_missing=True):
+    root = resolve("YuE2-Vae", download_missing)
+    return load_vae(root, None if name == "YuE2-Vae" else decoder(name, download_missing))
 
 
 def cancelled():

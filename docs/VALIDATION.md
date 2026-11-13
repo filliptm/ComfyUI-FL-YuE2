@@ -1,3 +1,9 @@
+# YuE2-VAE-RS x3 decoders
+
+Load Audio Decoder adds Ruach Studio's YuE2-VAE-RS x3 v1/v2 as optional decoders. Validated on CPU only (Linux, Python 3.12, Torch 2.15.0+cpu, ComfyUI c5751c8); GPU decoding, including the TF32-off path, has not been run for this change. The four new tests pass; the remaining failures are the same as on main in this environment (the captioner test needs google-genai, and two paired-audio training tests fail intermittently on CPU).
+
+Both files downloaded from the pinned revision and matched their SHA-256. Against independent reference decodes by Ruach Studio's yue2_vae_rs.py, 84 in-process decodes (both versions; 1 to 3,000 latent frames, a batch of two included; tile_frames 64 to 2,048) differed by at most 2.1e-5 (repeat runs vary in the last digit with CPU threading), and 156 x3 decodes through ComfyUI's HTTP API by at most 2.0e-5. The derived context is 60 frames for x3 and still 12 (16 with the floor) for YuE2-Vae. YuE2-Vae through the refactored loader is bit-identical to main (24 decodes), and the training encoder's latents are bit-identical (three files, mono and stereo, 6 to 70 seconds). Files replaced under the same name were verified again on the next queue: v2 under the v1 name, float16, incomplete, -full, YuE2-Vae, truncated and modified files were refused with their reason, and the release decoded again once restored. Latents arriving in bfloat16, float16 or float64 decode exactly as their float32 values, and `--fp16-vae` / `--bf16-vae` servers gave the same differences from the reference as the default server, to every digit (12 runs).
+
 # Caption acceptance and validation baselines
 
 Generated captions no longer require manual review. Validation previews now include a separate step-0 baseline and phase progress. The baseline uses the run's starting model and acoustic companion, and is not an exported AR checkpoint.

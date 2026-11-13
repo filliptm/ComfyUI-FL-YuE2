@@ -1,4 +1,7 @@
+import os
+
 from . import runtime
+from .downloads import DECODERS, decoder_path
 from .score_editor import FL_YuE2_ScoreEditor
 
 
@@ -19,6 +22,35 @@ class FL_YuE2_ModelLoader:
 
     def load(self, download_missing):
         return runtime.load_models(download_missing)
+
+
+class FL_YuE2_DecoderLoader:
+    CATEGORY = "FL YuE2"
+    FUNCTION = "load"
+    RETURN_TYPES = ("YUE2_VAE",)
+    RETURN_NAMES = ("audio_decoder",)
+    DESCRIPTION = "Load an audio decoder for Decode Audio. YuE2-Vae is the one Load Models provides. YuE2-VAE-RS x3 v1/v2 by Ruach Studio decode the same latents with a decoder grown three times (float32, about 0.8 GB, CC BY-NC 4.0)."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "decoder": (["YuE2-Vae", *DECODERS], {"default": "YuE2-Vae", "tooltip": "YuE2-Vae: the standard decoder. YuE2-VAE-RS-x3_v1/_v2: Ruach Studio's grown decoders, downloaded into models/yue2/YuE2-VAE-RS and verified by SHA-256."}),
+            "download_missing": ("BOOLEAN", {"default": True, "tooltip": "Download only missing decoder files. Turn off for strictly offline loading."}),
+        }}
+
+    @classmethod
+    def IS_CHANGED(cls, decoder, download_missing=True):
+        if decoder not in DECODERS:
+            return decoder
+        path = decoder_path(decoder)
+        try:
+            stat = os.stat(path)
+        except OSError:
+            return "missing"
+        return f"{path}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_ino}"
+
+    def load(self, decoder, download_missing):
+        return (runtime.load_decoder(decoder, download_missing),)
 
 
 class FL_YuE2_Plan:
@@ -87,10 +119,11 @@ class FL_YuE2_Decode:
         return (runtime.decode(audio_decoder, music_latents, tile_frames),)
 
 
-NODE_CLASS_MAPPINGS = {cls.__name__: cls for cls in (FL_YuE2_ModelLoader, FL_YuE2_Plan, FL_YuE2_Render, FL_YuE2_Decode, FL_YuE2_ScoreEditor)}
+NODE_CLASS_MAPPINGS = {cls.__name__: cls for cls in (FL_YuE2_ModelLoader, FL_YuE2_DecoderLoader, FL_YuE2_Plan, FL_YuE2_Render, FL_YuE2_Decode, FL_YuE2_ScoreEditor)}
 NODE_DISPLAY_NAME_MAPPINGS = {
     "FL_YuE2_ScoreEditor": "FL YuE2 · Piano Roll",
     "FL_YuE2_ModelLoader": "FL YuE2 · Load Models",
+    "FL_YuE2_DecoderLoader": "FL YuE2 · Load Audio Decoder",
     "FL_YuE2_Plan": "FL YuE2 · Compose",
     "FL_YuE2_Render": "FL YuE2 · Render Music",
     "FL_YuE2_Decode": "FL YuE2 · Decode Audio",
