@@ -1,14 +1,74 @@
+from contextlib import contextmanager
+
 import torch
 from torch import nn
 from comfy.ldm.audio.autoencoder import OobleckDecoder, DecoderBlock, ResidualUnit, SnakeBeta
 from comfy.model_management import throw_exception_if_processing_interrupted
 
 
+class GrownDecoder(OobleckDecoder):
+    """YuE2-VAE-RS x3 (Ruach Studio): the YuE2-Vae decoder with three residual units at the latent rate after the first
+    convolution and three more at the end of each block, dilations 1, 3, 9 at the stream's width. Same latents as YuE2-Vae."""
+
+    def __init__(self, **config):
+        super().__init__(**config)
+        snake, antialias = config.get("use_snake", False), config.get("antialias_activation", False)
+        width = self.layers[0].out_channels
+        self.pre = nn.Sequential(*(ResidualUnit(width, width, dilation, snake, antialias) for dilation in (1, 3, 9)))
+        for block in self.layers:
+            if isinstance(block, DecoderBlock):
+                width = block.layers[1].out_channels
+                block.layers.extend(ResidualUnit(width, width, dilation, snake, antialias) for dilation in (1, 3, 9))
+
+    def forward(self, x):
+        return self.layers[1:](self.pre(self.layers[0](x)))
+
+
+def grown_weights(weights):
+    """YuE2-VAE-RS release tensor names -> GrownDecoder's (ComfyUI Oobleck names plus decoder.pre)."""
+    unit = ("snake1", "conv1", "snake2", "conv2")
+    renamed = {}
+    for key, value in weights.items():
+        part = key.split(".")
+        if part[0] in ("conv1", "snake1", "conv2"):
+            name = ["layers", {"conv1": 0, "snake1": 7, "conv2": 8}[part[0]], *part[1:]]
+        elif part[0] == "pre" and part[2] in unit:
+            name = ["pre", part[1], "layers", unit.index(part[2]), *part[3:]]
+        elif part[0] == "blocks" and part[2] in ("snake1", "conv_t1"):
+            name = ["layers", int(part[1]) + 1, "layers", ("snake1", "conv_t1").index(part[2]), *part[3:]]
+        elif part[0] == "blocks" and part[2] == "units" and part[4] in unit:
+            name = ["layers", int(part[1]) + 1, "layers", int(part[3]) + 2, "layers", unit.index(part[4]), *part[5:]]
+        else:
+            raise ValueError(f"Unexpected YuE2-VAE-RS tensor: {key}")
+        renamed["decoder." + ".".join(map(str, name))] = value
+    return renamed
+
+
+@contextmanager
+def exact_float32(device):
+    """cuDNN may run float32 convolutions as TF32 on Ampere and newer; the x3 decoders are validated without it."""
+    if device.type != "cuda":
+        yield
+        return
+    saved = torch.backends.cudnn.allow_tf32, torch.backends.cuda.matmul.allow_tf32
+    torch.backends.cudnn.allow_tf32 = torch.backends.cuda.matmul.allow_tf32 = False
+    try:
+        yield
+    finally:
+        torch.backends.cudnn.allow_tf32, torch.backends.cuda.matmul.allow_tf32 = saved
+
+
+def _stages(module):
+    if isinstance(module, nn.Sequential):
+        return list(module)
+    layers = list(module.layers)
+    return layers[:1] + [module.pre] + layers[1:] if isinstance(module, GrownDecoder) else layers
+
+
 def _dependency_interval(module, low, high):
     """Inclusive input support of an output interval; no waveform blending."""
     if isinstance(module, (nn.Sequential, OobleckDecoder, DecoderBlock)):
-        layers = module if isinstance(module, nn.Sequential) else module.layers
-        for child in reversed(list(layers)):
+        for child in reversed(_stages(module)):
             low, high = _dependency_interval(child, low, high)
         return low, high
     if isinstance(module, ResidualUnit):
@@ -29,8 +89,7 @@ def _dependency_interval(module, low, high):
 
 def _output_length(module, length):
     if isinstance(module, (nn.Sequential, OobleckDecoder, DecoderBlock)):
-        layers = module if isinstance(module, nn.Sequential) else module.layers
-        for child in layers:
+        for child in _stages(module):
             length = _output_length(child, length)
         return length
     if isinstance(module, nn.ConvTranspose1d):
@@ -47,17 +106,21 @@ def _output_length(module, length):
 
 
 class YuE2VAE(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, grown=False):
         super().__init__()
         decoder = dict(config["decoder_config"])
         if decoder.pop("snake_type", "vanilla") != "vanilla" or decoder.pop("use_filter", False):
             raise ValueError("Unsupported YuE2 decoder format")
-        self.decoder = OobleckDecoder(**decoder)
+        self.decoder = (GrownDecoder if grown else OobleckDecoder)(**decoder)
+        self.exact = grown
         self.ratio = config["downsampling_ratio"]
         self.sample_rate = config["sample_rate"]
 
     def decode(self, latent):
-        return self.decoder(latent)
+        if not self.exact:
+            return self.decoder(latent)
+        with exact_float32(latent.device):
+            return self.decoder(latent)
 
     def decode_tiled(self, latent, core_frames=1024, on_progress=None):
         frames = latent.shape[-1]

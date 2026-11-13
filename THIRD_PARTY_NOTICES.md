@@ -20,3 +20,9 @@ Copyright (c) 2026 the YuE2 authors. Apache License 2.0; see LICENSE.
 
 abc_score.py adapts the native ABC parser from the same commit's
 skills/yue2-music/scripts/abc_tools.py, under the same Apache 2.0 license.
+
+The optional YuE2-VAE-RS x3 decoder layout (three residual units at the latent
+rate and three more per decoder block) follows Ruach Studio's YuE2-VAE-RS
+release, https://huggingface.co/goldhub/YuE2-RS-Finetunes (integration code
+Apache 2.0, Copyright 2026 Viktor Zhuromskyy, Ruach Studio). Its weights are
+not bundled; they download on request under CC BY-NC 4.0 (see MODEL_LICENSE).
